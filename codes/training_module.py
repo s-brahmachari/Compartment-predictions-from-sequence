@@ -135,7 +135,7 @@ class CompPred(keras.Model):
         self.dense2 = layers.Dense(128, activation="relu", bias_regularizer=tf.keras.regularizers.L2(0.001))
         self.dense3 = layers.Dense(64, activation="relu", bias_regularizer=tf.keras.regularizers.L2(0.001))
         self.dropout = layers.Dropout(0.5)
-        self.softmax = layers.Dense(5, activation="relu")
+        self.softmax = layers.Dense(5, activation="sigmoid")
 
     def call(self, inputs,):    
         x = self.dense1(inputs)
