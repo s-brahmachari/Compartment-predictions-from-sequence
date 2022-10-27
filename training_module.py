@@ -1,5 +1,6 @@
 import numpy as np
 import copy
+import pandas as pd
 import pyBigWig
 import sys, os, time, glob, random, requests, shutil
 from tqdm import tqdm
@@ -222,7 +223,7 @@ class download_ENCODE_data:
 
 class preprocess():
     def __init__(self,data_path):
-        #set the data path
+        #set the path to the data for analysis
         self.path=data_path
         if len(data_path.split('/')[-1])>0: name=data_path.split('/')[-1]
         else: name=data_path.split('/')[-2]
@@ -243,7 +244,7 @@ class preprocess():
         
         print(f'Loading data from: {data_path}')
         self._load_data()
-        print(f'Using {len(self.tracks)} tracks:', self.tracks)
+        print(f'There are {len(self.tracks)} tracks:', self.tracks)
         print(f'Number of chromosomes:{self.Nchr}')
         print('\nNormalizing data...')
         self._normalize_data()
@@ -368,6 +369,19 @@ class preprocess():
         xtrain=np.array(ret_vec[1:].T, dtype=float)
         ytrain=np.array(list(map(self.type_to_int.get, ret_vec[0])), dtype=float)
         return [xtrain, ytrain, fts_vec]
+
+def run_preprocessing(path='ENCODE_data/GM12878_hg19/'):
+    pre = preprocess(path)
+    print('Get training data ...')
+    x_pre, y_pre, features = pre.get_training_data(features=pre.get_features(), typespath=None)
+    
+    df = pd.DataFrame(np.concatenate((x_pre,y_pre.reshape(-1,1)), axis=1), 
+                     columns=np.concatenate((features,['labels'])))
+    print('Save training data ...')
+    df.to_csv('ENCODE_data/processed_data/GM12878_hg19.csv.zip', compression='zip', index=False)
+    print('done!')
+    
+    return df
 
 
 class CompPred(keras.Model):
