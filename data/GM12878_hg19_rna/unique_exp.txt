@@ -1,2 +1,0 @@
-minus-total-RNA-seq
-plus-total-RNA-seq
