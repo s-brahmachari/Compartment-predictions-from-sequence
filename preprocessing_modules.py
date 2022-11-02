@@ -11,13 +11,15 @@ class ENCODE_data:
     def __init__(self, cell_line='GM12878', assembly='hg19',
                  signal_type='signal p-value',
                  save_dest='ENCODE_data',
+                 res=100000,
                  histones=True,tf=False,atac=False,small_rna=False,total_rna=False):
 
         self.cell_line=cell_line
+        self.res = res
         self.assembly=assembly
         self.signal_type=signal_type
         self.savedest=save_dest
-        self.cell_line_path=os.path.join(save_dest,cell_line+'_'+assembly)
+        self.cell_line_path=os.path.join(save_dest,cell_line+'_'+assembly+'_'+str(int(res/1000))+'k')
         self.ref_cell_line='GM12878'
         self.ref_assembly='hg19'
         # self.ref_cell_line_path=ref_cell_line_path
@@ -28,13 +30,14 @@ class ENCODE_data:
         self.small_rna=small_rna
         self.total_rna=total_rna
 
-        self.type_to_int={'A1':0, 'A2':1, 'B1':2, 'B2':3, 'B3':4, 'B4':5, 'NA':6}
+        self.type_to_int={'A1':0, 'A2':0, 'B1':1, 'B2':1, 'B3':1, 'B4':1, 'NA':0}
         self.int_to_type={0:'A1', 1:'A2', 2:'B1', 3:'B2', 4:'B3', 5:'B4', 6:'NA'}
-        
+        self.set_chrm_size(res=self.res)
         
         print('Selected cell line to predict: '+self.cell_line)
         print('Selected assembly: '+self.assembly)
         print('Selected signal type: '+self.signal_type)
+        print('Selected resolution: ', int(self.res/1000),'kb')
         
     def _download_replicas(self,line,cell_line_path,chrm_size):
         text=line.split()[0]
@@ -92,21 +95,25 @@ class ENCODE_data:
             except:
                 print('This experiment was incomplete:',text,'\nit will not be used.')
 
-    def download(self,nproc=4, res=50000):
-        
-        self.res=res
+    def set_chrm_size(self, res):
+        self.res = res
 
         if self.assembly=='GRCh38':
-            # self.chrm_size = np.array([4980,4844,3966,3805,3631,3417,3187,2903,2768,2676,2702,2666,2288,2141,2040,1807,1666,1608,1173,1289,935,1017,3121])
-            ref=pd.read_table("https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_assembly_report.txt", comment='#', sep='\t',
-                    names=['Sequence-Name', 'Sequence-Role', 'Assigned-Molecule','Assigned-Molecule-Location/Type',	'GenBank-Accn','Relationship', 'RefSeq-Accn', 'Assembly-Unit', 'Sequence-Length', 'UCSC-style-name'])
-            
+            url = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_assembly_report.txt"
         else:
-            ref=pd.read_table("https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.13_GRCh37/GCF_000001405.13_GRCh37_assembly_report.txt", comment='#', sep='\t',
+            url = "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.13_GRCh37/GCF_000001405.13_GRCh37_assembly_report.txt"
+
+        ref=pd.read_table(url, comment='#', sep='\t',
                     names=['Sequence-Name', 'Sequence-Role', 'Assigned-Molecule','Assigned-Molecule-Location/Type',	'GenBank-Accn','Relationship', 'RefSeq-Accn', 'Assembly-Unit', 'Sequence-Length', 'UCSC-style-name'])
-            
+
         self.chrm_size=list((ref[ (ref['Sequence-Role']=='assembled-molecule') & (ref['Sequence-Name']!='Y') ]['Sequence-Length']/self.res).apply(np.ceil).astype(int))
-            
+        
+    def get_chrm_size(self):
+        return self.chrm_size
+
+    def download(self, nproc=4,):
+
+        assert hasattr(self, "chrm_size"), "Resolution not set. Use set_chrm_size(res)"
 
         url='https://www.encodeproject.org/metadata/?type=Experiment&'
         if self.hist==True:
@@ -308,12 +315,50 @@ class ENCODE_data:
     def get_features(self, ):
         return list(self.norm_data.keys())
 
-    def get_Xdata(self, n_neighbor=2, features=None):
+    def get_training_labels(self,):
+        df=pd.read_table('https://ftp.ncbi.nlm.nih.gov/geo/series/GSE63nnn/GSE63525/suppl/GSE63525_GM12878_subcompartments.bed.gz', 
+                            names=['chr', 'x1', 'x2', 'type','label'], 
+                            usecols=range(5),keep_default_na=False)
+    
+        labels=[]
+        for ii in list(range(1,self.Nchr+1)):
+            for xx in df[df['chr']==f'chr{ii}'].to_numpy():
+                n=np.ceil((xx[2]-xx[1])/self.res)
+                for _ in range(int(n)):
+                    # print(int(xx[1]/res)+nn, xx[3])
+                    labels.append(xx[3])
+        return np.array(labels, dtype=str)
+
+    def get_input_vec(self, n_neighbor=2, features=None):
+        
+        unique_exps= os.path.join(self.cell_line_path, 'unique_exp.txt')
+        assert os.path.exists(unique_exps), 'Data path does not exist! Run download() first!'
+
+        #list of experiment tracks
+        #combine plus/minus RNA seq signals
+        self.tracks=np.unique([xx.split('-')[0] for xx in 
+                        np.loadtxt(unique_exps, dtype=str)])
+
+        # create dict of dict to store data for tracks and chromosomes
+        self.avg_data={f'{xx}':{} for xx in self.tracks}
+
+        # self.type_to_int_AB={'A1':0, 'A2':0, 'B1':1, 'B2':1, 'B3':1, 'B4':1, 'NA':2}
+        # self.sub_to_comp={0:0,1:0,2:1,3:1,4:1,5:1,6:2}
+        
+        print(f'Loading data from: {self.cell_line_path}')
+        self._load_data()
+        print(f'There are {len(self.tracks)} tracks:', self.tracks)
+        print(f'Number of chromosomes:{self.Nchr}')
+        print('\nNormalizing data...')
+        self._normalize_data()
+        print('done!')
+
         #state (input) vector
         xdata = []
         fts_vec = []
-        if features is None: features = self.norm_data.keys()
 
+        if features is None: features = self.norm_data.keys()
+        
         for chrm in range(1,self.Nchr+1):
             chrm_data = []
             for track in self.tracks:
@@ -330,8 +375,10 @@ class ENCODE_data:
             
             chrm_data=np.array(chrm_data).reshape(len(features)*(2*n_neighbor+1),-1)
             xdata.append(chrm_data)
-            # rowlen+=len(row)
+            
         xdata = np.concatenate(xdata,axis=1)
+    
+        return pd.DataFrame(xdata.T, columns=fts_vec)
         
         # for track in self.tracks:
         #     if track not in features: continue
@@ -355,43 +402,53 @@ class ENCODE_data:
         
         # xdata=np.array(xdata).reshape(len(features)*(2*n_neighbor+1),-1)
 
-        return [xdata, np.array(fts_vec)]
+        # return [xdata, np.array(fts_vec)]
 
-    def get_Ydata(self, typespath):
-        # typepath='../data/GM12878_hg19_chip_seq/types/'
-        ydata=np.loadtxt(os.path.join(typespath,'chr1_beads.txt.original'), dtype=str, usecols=1)
-        for chrm in range(2,self.Nchr+1):
-            ydata=np.concatenate((ydata, np.loadtxt(os.path.join(typespath,f'chr{chrm}_beads.txt.original'), dtype=str, usecols=1)))
-        return ydata
+    # def get_Ydata(self, typespath):
+    #     # typepath='../data/GM12878_hg19_chip_seq/types/'
+    #     ydata=np.loadtxt(os.path.join(typespath,'chr1_beads.txt.original'), dtype=str, usecols=1)
+    #     for chrm in range(2,self.Nchr+1):
+    #         ydata=np.concatenate((ydata, np.loadtxt(os.path.join(typespath,f'chr{chrm}_beads.txt.original'), dtype=str, usecols=1)))
+    #     return ydata
 
-    def get_training_data(self, n_neighbor=2, features=None, typespath=None):
-        try:
-            if typespath is None: 
-                if len(self.cell_line_path.split('/')[-1])>0: 
-                    name=self.cell_line_path.split('/')[-1]
-                else: name=self.cell_line_path.split('/')[-2]
-                typespath = os.path.join('ENCODE_data/types',name)
-            
-            ytrain=self.get_Ydata(typespath)
-            xtrain, fts_vec = self.get_Xdata(n_neighbor, features)
-            ret_vec=np.vstack((ytrain, xtrain))
-
-            #remove 'NA' and 'B4' from predictions
-            indices_NA=np.where(ret_vec[0]=='NA')[0]
-            indices_B4=np.where(ret_vec[0]=='B4')[0]
-            indices_to_remove=np.concatenate((indices_NA, indices_B4))
-            ret_vec = np.delete(ret_vec, indices_to_remove, axis=1)
-            
-            xtrain=np.array(ret_vec[1:].T, dtype=float)
-            ytrain=np.array(list(map(self.type_to_int.get, ret_vec[0])), dtype=float)
+    def get_training_data(self, n_neighbor=2, features=None, ):
+        assert self.cell_line=='GM12878', "Training is only done on GM12878."
         
-        except (OSError,):
-            print('No labels found! only generating Xdata.')
-            xtrain, fts_vec = self.get_Xdata(n_neighbor, features)
-            xtrain=xtrain.T
-            ytrain=np.array([None for _ in range(xtrain.shape[0])])
+        df_train = self.get_input_vec(n_neighbor, features)
+        labels = self.get_training_labels()
+        
+        assert df_train.shape[0]==labels.shape[0], 'labels and input data of different dimensions!!'
 
-        return [xtrain, ytrain, fts_vec]
+        df_train_filtered = df_train[(labels!='NA') & (labels!='B4')]
+        labels_filtered = labels[(labels!='NA') & (labels!='B4')]
+        labels_filtered_num = np.array(list(map(self.type_to_int.get, labels_filtered)), dtype=float)
+        # df_train_filtered = df_train[(df_train['type']!='NA') | (df_train['type']!='B4')]
+        # df_train_filtered['labels'] = np.array(list(map(self.type_to_int.get, df_train_filtered['type'])), dtype=float)
+        # df_train_filtered.drop(['type'], axis=1)
+
+        return df_train_filtered, labels_filtered_num
+
+        # try:
+        #     ytrain=self.get_training_labels()
+        #     xtrain, fts_vec = self.get_input_vec(n_neighbor, features)
+        #     ret_vec=np.vstack((ytrain, xtrain))
+
+        #     #remove 'NA' and 'B4' from predictions
+        #     indices_NA=np.where(ret_vec[0]=='NA')[0]
+        #     indices_B4=np.where(ret_vec[0]=='B4')[0]
+        #     indices_to_remove=np.concatenate((indices_NA, indices_B4))
+        #     ret_vec = np.delete(ret_vec, indices_to_remove, axis=1)
+            
+        #     xtrain=np.array(ret_vec[1:].T, dtype=float)
+        #     ytrain=np.array(list(map(self.type_to_int.get, ret_vec[0])), dtype=float)
+        
+        # except (OSError,):
+        #     print('No labels found! only generating Xdata.')
+        #     xtrain, fts_vec = self.get_Xdata(n_neighbor, features)
+        #     xtrain=xtrain.T
+        #     ytrain=np.array([None for _ in range(xtrain.shape[0])])
+
+        # return [xtrain, ytrain, fts_vec]
 
 
 # class preprocess():
