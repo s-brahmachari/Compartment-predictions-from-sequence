@@ -2,7 +2,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-
+#check 
 def FFN_block(hidden_units, dropout_rate, name=None):
     fnn_layers = []
 
