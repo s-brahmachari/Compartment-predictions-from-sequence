@@ -3,8 +3,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 from sklearn.metrics import roc_auc_score
-
-#check 
+ 
 def FFN_block(hyper_params, name=None):
     fnn_layers = []
     for units in hyper_params["block_sizes"]:

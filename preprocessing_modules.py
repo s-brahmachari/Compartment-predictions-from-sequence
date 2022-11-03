@@ -130,11 +130,9 @@ class ENCODE_data:
 
         r = requests.get(self.url_ref)
         content=str(r.content)
-        # print('red', content)
         experiments=[]
         for k in content.split('\\n')[:-1]:
             l=k.split('\\t')
-            # print('blue', l)
             if l[5]==self.ref_assembly and l[4]==self.signal_type and l[7]=='Histone ChIP-seq':
                 experiments.append(l[22])
             elif l[5]==self.ref_assembly and l[4]==self.signal_type and l[7]=='ATAC-seq':
