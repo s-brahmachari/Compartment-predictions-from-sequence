@@ -59,7 +59,7 @@ def run_experiment(model, x_train, y_train, x_test, y_test, num_epochs, hyper_pa
     )
     # Create an early stopping callback.
     early_stopping = keras.callbacks.EarlyStopping(
-        monitor="val_accuracy", patience=30, restore_best_weights=True, min_delta=0.02
+        monitor="val_accuracy", patience=30, restore_best_weights=True, min_delta=0.015
     )
     # Fit the model.
     history = model.fit(
