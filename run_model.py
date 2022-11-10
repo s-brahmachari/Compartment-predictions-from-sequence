@@ -15,10 +15,13 @@ import seaborn as sn
 import copy
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-rand', dest='rand', type=int, default=465)
-parser.add_argument('-n_epochs', dest='num_epochs', type=int, default=20)
+parser.add_argument('-rand', dest='rand', type=int, default=None)
+parser.add_argument('-n_epochs', dest='num_epochs', type=int, default=30)
 
 args = parser.parse_args()
+rand = args.rand
+
+if rand==None: rand = np.random.randint(1000)
 
 hyper_params={
     "learning_rate":0.005,
@@ -57,8 +60,32 @@ def main():
         if feature.split('_')[0] not in use_features:
             x_df_0.drop([feature], axis=1, inplace=True)
     
-    _, df_cm, df_cm_AB = create_confusion_matrix(x_df_0, labels, enc)
-    baseline = np.append(np.diag(df_cm.to_numpy()), np.diag(df_cm_AB.to_numpy()))
+    baseline = []
+    Nrep=2
+    df_cm_tot = []
+    df_cm_AB_tot = []
+    for rep in range(Nrep):
+        df_cm, df_cm_AB = create_confusion_matrix(x_df_0, labels, enc)
+        baseline.append(np.append(np.diag(df_cm.to_numpy()), np.diag(df_cm_AB.to_numpy())))
+        df_cm_tot.append(df_cm.to_numpy())
+        df_cm_AB_tot.append(df_cm_AB.to_numpy())
+
+    baseline = np.array(baseline).reshape(Nrep,7)
+    baseline = np.mean(baseline, axis=0)
+    df_cm_tot = np.array(df_cm_tot).reshape(Nrep,5,5)
+    df_cm_tot = np.mean(df_cm_tot, axis=0)
+    df_cm_AB_tot = np.array(df_cm_AB_tot).reshape(Nrep,2,2)
+    df_cm_AB_tot = np.mean(df_cm_AB_tot, axis=0)
+
+    df_cm_tot = pd.DataFrame(df_cm_tot, index = ['A1','A2','B1','B2','B3'],
+                columns = ['A1','A2','B1','B2','B3'])
+
+    df_cm_AB_tot = pd.DataFrame(df_cm_AB_tot, index = ['A','B'],
+                columns = ['A','B'])
+
+    fig = plot_confusion_matrix(df_cm_tot, df_cm_AB_tot)
+    fig.savefig('analysis_data/plots/confusion-avg.png', dpi=300, bbox_inches="tight")
+
     ftr_drop_df = []
     
     for ftr_drop in use_features:
@@ -66,15 +93,36 @@ def main():
         for feature in x_df.columns:
             if feature.split('_')[0]==ftr_drop:
                 x_df.drop([feature], axis=1, inplace=True)
+        
+        diag_vals = []
+        df_cm_av = []
+        df_cm_AB_av = []
+        for rep in range(Nrep):
+            df_cm, df_cm_AB = create_confusion_matrix(x_df, labels, enc)
+            diag_vals.append(np.append(np.diag(df_cm.to_numpy()), np.diag(df_cm_AB.to_numpy())))
+            df_cm_av.append(df_cm.to_numpy())
+            df_cm_AB_av.append(df_cm_AB.to_numpy())
 
-        print(x_df.columns)
-        fig, df_cm, df_cm_AB = create_confusion_matrix(x_df, labels, enc)
-        diag_vals = np.append(np.diag(df_cm.to_numpy()), np.diag(df_cm_AB.to_numpy()))
+        diag_vals = np.array(diag_vals).reshape(Nrep,7)
+        diag_vals = np.mean(diag_vals, axis=0)
+
+        df_cm_av = np.array(df_cm_av).reshape(Nrep,5,5)
+        df_cm_av = np.mean(df_cm_av, axis=0)
+        df_cm_AB_av = np.array(df_cm_AB_av).reshape(Nrep,2,2)
+        df_cm_AB_av = np.mean(df_cm_AB_av, axis=0)
+
+        df_cm_av = pd.DataFrame(df_cm_av, index = ['A1','A2','B1','B2','B3'],
+                columns = ['A1','A2','B1','B2','B3'])
+
+        df_cm_AB_av = pd.DataFrame(df_cm_AB_av, index = ['A','B'],
+                columns = ['A','B'])
+
+        fig = plot_confusion_matrix(df_cm_tot, df_cm_AB_tot)
         fig.savefig(f'analysis_data/plots/confusion-{ftr_drop}.png', dpi=300, bbox_inches="tight")
 
         ftr_drop_df.append(diag_vals-baseline)
 
-    ftr_drop_df = pd.DataFrame(np.array(ftr_drop_df).reshape(len(use_features),-1),
+    ftr_drop_df = pd.DataFrame(np.array(ftr_drop_df).reshape(len(use_features),7),
                                 index = use_features,
                                 columns = ['A1','A2','B1','B2','B3', 'A', 'B'])
     
@@ -88,7 +136,7 @@ def main():
 
 def create_confusion_matrix(x_df, labels, enc):
 
-    X_train, X_test, Y_train, Y_test = train_test_split(x_df.to_numpy(), labels, test_size=0.5, random_state=args.rand)
+    X_train, X_test, Y_train, Y_test = train_test_split(x_df.to_numpy(), labels, test_size=0.3, random_state=rand)
 
     model = mm.baseFNNmodel(input_shape=X_train.shape[1], output_shape=len(np.unique(Y_train)), hyper_params=hyper_params)
     # keras.utils.plot_model(model, to_file='analysis_data/plots/model.png', show_shapes=False, dpi=300, show_layer_names=False, rankdir='TB')
@@ -119,6 +167,10 @@ def create_confusion_matrix(x_df, labels, enc):
     df_cm_AB = pd.DataFrame(conf_mat_AB, index = ['A','B'],
                 columns = ['A','B'])
 
+    # 
+    return df_cm, df_cm_AB
+
+def plot_confusion_matrix(df_cm, df_cm_AB):
     fig = plt.figure(figsize = (8,5), dpi=300)
 
     ax1 = fig.add_axes([0.1,0.1,0.5,0.8])
@@ -131,10 +183,7 @@ def create_confusion_matrix(x_df, labels, enc):
     g2.set(xlabel='Predictions (DNN)', ylabel='Actual (Hi-C)')
 
     sn.set(font_scale=1.2)
-    
-    return fig, df_cm, df_cm_AB
-
-    
+    return fig
 
     # save_dict["result"] = {"train_loss":hist.history["loss"], 
     #                             "val_loss":hist.history["val_loss"],
