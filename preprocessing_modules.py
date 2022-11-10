@@ -11,15 +11,17 @@ class ENCODE_data:
     def __init__(self, cell_line='GM12878', assembly='hg19',
                  signal_type='signal p-value',
                  save_dest='ENCODE_data',
+                 avg_type="mean",
                  res=100000,
                  histones=True,tf=False,atac=False,small_rna=False,total_rna=False):
 
         self.cell_line=cell_line
         self.res = res
+        self.avg_type = avg_type
         self.assembly=assembly
         self.signal_type=signal_type
         self.savedest=save_dest
-        self.cell_line_path=os.path.join(save_dest,cell_line+'_'+assembly+'_'+str(int(res/1000))+'k')
+        self.cell_line_path=os.path.join(save_dest,cell_line+'_'+assembly+'_'+str(int(res/1000))+'k'+'_'+str(self.avg_type))
         self.ref_cell_line='GM12878'
         self.ref_assembly='hg19'
         # self.ref_cell_line_path=ref_cell_line_path
@@ -30,8 +32,10 @@ class ENCODE_data:
         self.small_rna=small_rna
         self.total_rna=total_rna
 
-        self.type_to_int={'A1':0, 'A2':0, 'B1':1, 'B2':1, 'B3':1, 'B4':1, 'NA':0}
+        self.type_to_int={'A1':0, 'A2':1, 'B1':2, 'B2':3, 'B3':4, 'B4':5, 'NA':6}
         self.int_to_type={0:'A1', 1:'A2', 2:'B1', 3:'B2', 4:'B3', 5:'B4', 6:'NA'}
+        self.int_to_type_AB={0:'A', 1:'A', 2:'B', 3:'B', 4:'B', 5:'B', 6:'NA'}
+        self.int_subtype_to_int_AB={0:0, 1:0, 2:1, 3:1, 4:1, 5:1, 6:2}
         self.set_chrm_size(res=self.res)
         
         print('Selected cell line to predict: '+self.cell_line)
@@ -39,7 +43,7 @@ class ENCODE_data:
         print('Selected signal type: '+self.signal_type)
         print('Selected resolution: ', int(self.res/1000),'kb')
         
-    def _download_replicas(self,line,cell_line_path,chrm_size):
+    def _download_replicas(self,line,cell_line_path,chrm_size, avg_type):
         text=line.split()[0]
         exp=line.split()[1]
         count=line.split()[2]
@@ -61,7 +65,7 @@ class ENCODE_data:
                 bw = pyBigWig.open("https://www.encodeproject.org/files/"+text+"/@@download/"+text+".bigWig")
                 for chr in range(1,23):
                     
-                    signal = bw.stats("chr"+str(chr), type="mean", nBins=chrm_size[chr-1])
+                    signal = bw.stats("chr"+str(chr), type=avg_type, nBins=chrm_size[chr-1])
                     signal=np.array(signal)
                     signal[signal==None]=0.0
                     signal[signal<0.0]=0.0
@@ -75,7 +79,7 @@ class ENCODE_data:
                         for i in range(len(signal)):
                             f.write(str(i)+" "+str(signal[i])+" "+str(signal[i])+"\n")
                 chr='X'
-                signal = bw.stats("chr"+chr, type="mean", nBins=chrm_size[-1])
+                signal = bw.stats("chr"+chr, type=avg_type, nBins=chrm_size[-1])
 
                 #Process signal and binning
                 signal=np.array(signal)
@@ -218,7 +222,7 @@ class ENCODE_data:
                 list_names.append(text+' '+exp+' '+str(count))
 
         print('Number of replicas:', len(list_names))
-        self.successful_exp = Parallel(n_jobs=nproc)(delayed(self._download_replicas)(list_names[i],self.cell_line_path,self.chrm_size) 
+        self.successful_exp = Parallel(n_jobs=nproc)(delayed(self._download_replicas)(list_names[i],self.cell_line_path,self.chrm_size, avg_type=self.avg_type) 
                                       for i in tqdm(range(len(list_names)), desc="Process replicas",bar_format='{l_bar}{bar:40}{r_bar}{bar:-10b}'))
         self.successful_exp= [i for i in self.successful_exp if i]
         self.successful_unique_exp=np.unique(self.successful_exp)
@@ -257,7 +261,7 @@ class ENCODE_data:
 
         self.Nchr=len(self.avg_data[track].keys())
         
-    def _normalize_data(self, p_cut=90):
+    def _normalize_data(self, pcut_high, pcut_low):
         # average the replica tracks then normalize them to be between 0 and 1
         self.norm_data=copy.deepcopy(self.avg_data)
         for track in self.avg_data.keys():
@@ -268,15 +272,18 @@ class ENCODE_data:
                 if len(self.norm_data[track][chrm].shape)>1:
                     self.norm_data[track][chrm] = np.mean(self.avg_data[track][chrm], axis=0)
                 
-                # shift the baseline to the minumum value
-                self.norm_data[track][chrm] -= self.norm_data[track][chrm].min()
+                # # shift the baseline to the minumum value
+                # self.norm_data[track][chrm] -= self.norm_data[track][chrm].min()
 
                 # linear transform the data by dividing by p_cut percentile
-                percentile_cutoff = np.percentile(self.norm_data[track][chrm], p_cut)
-                self.norm_data[track][chrm] /= percentile_cutoff
+                percentile_cutoff_high = np.percentile(self.norm_data[track][chrm], pcut_high)
+                percentile_cutoff_low = np.percentile(self.norm_data[track][chrm], pcut_low)
+                # self.norm_data[track][chrm] /= percentile_cutoff
                 
                 # saturate the high values at p_cut percentile
-                self.norm_data[track][chrm][self.norm_data[track][chrm]>1]=1.0
+                # self.norm_data[track][chrm][self.norm_data[track][chrm]>1]=1.0
+                self.norm_data[track][chrm][self.norm_data[track][chrm]>percentile_cutoff_high]=percentile_cutoff_high
+                self.norm_data[track][chrm][self.norm_data[track][chrm]<percentile_cutoff_low]=percentile_cutoff_low
 
     def preprocess(self, n_neighbor=2, save=False):
         
@@ -313,6 +320,8 @@ class ENCODE_data:
     def get_features(self, ):
         return list(self.norm_data.keys())
 
+    # def 
+
     def get_training_labels(self,):
         df=pd.read_table('https://ftp.ncbi.nlm.nih.gov/geo/series/GSE63nnn/GSE63525/suppl/GSE63525_GM12878_subcompartments.bed.gz', 
                             names=['chr', 'x1', 'x2', 'type','label'], 
@@ -327,7 +336,7 @@ class ENCODE_data:
                     labels.append(xx[3])
         return np.array(labels, dtype=str)
 
-    def get_input_vec(self, n_neighbor=2, features=None):
+    def get_input_vec(self, n_neighbor, pcut_low, pcut_high, features=None, ):
         
         unique_exps= os.path.join(self.cell_line_path, 'unique_exp.txt')
         assert os.path.exists(unique_exps), 'Data path does not exist! Run download() first!'
@@ -348,7 +357,7 @@ class ENCODE_data:
         print(f'There are {len(self.tracks)} tracks:', self.tracks)
         print(f'Number of chromosomes:{self.Nchr}')
         print('\nNormalizing data...')
-        self._normalize_data()
+        self._normalize_data(pcut_high=pcut_high, pcut_low=pcut_low)
         print('done!')
 
         #state (input) vector
@@ -409,10 +418,10 @@ class ENCODE_data:
     #         ydata=np.concatenate((ydata, np.loadtxt(os.path.join(typespath,f'chr{chrm}_beads.txt.original'), dtype=str, usecols=1)))
     #     return ydata
 
-    def get_training_data(self, n_neighbor=2, features=None, ):
+    def get_training_data(self, n_neighbor=2, pcut_low=5, pcut_high=95, features=None, ):
         assert self.cell_line=='GM12878', "Training is only done on GM12878."
         
-        df_train = self.get_input_vec(n_neighbor, features)
+        df_train = self.get_input_vec(n_neighbor, pcut_low=pcut_low, pcut_high=pcut_high, features=features)
         labels = self.get_training_labels()
         
         assert df_train.shape[0]==labels.shape[0], 'labels and input data of different dimensions!!'

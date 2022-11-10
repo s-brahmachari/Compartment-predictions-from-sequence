@@ -1,3 +1,6 @@
 ENCODE_data/
 processed_data/
 analysis_data/
+slurm_scripts/
+*.png
+*.pyc

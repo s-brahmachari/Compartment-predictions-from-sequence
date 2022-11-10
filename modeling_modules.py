@@ -6,7 +6,8 @@ from sklearn.metrics import roc_auc_score
  
 def FFN_block(hyper_params, name=None):
     fnn_layers = []
-    for units in hyper_params["block_sizes"]:
+    
+    for layer_ndx in range(hyper_params["block_size"]):
         
         if hyper_params["useBatchNorm"]:
         
@@ -18,7 +19,7 @@ def FFN_block(hyper_params, name=None):
 
             fnn_layers.append(layers.Dropout(hyper_params["dropout_rate"]))
         
-        fnn_layers.append(layers.Dense(units, activation=hyper_params["activation"], 
+        fnn_layers.append(layers.Dense(hyper_params["units_per_layer"], activation=hyper_params["activation"], 
                             kernel_initializer=hyper_params["initializer"]))
 
     return keras.Sequential(fnn_layers, name=name)
@@ -26,7 +27,7 @@ def FFN_block(hyper_params, name=None):
 def baseFNNmodel(input_shape, output_shape, hyper_params):
     
     assert ("useDropout" in hyper_params and
-            "block_sizes" in hyper_params and 
+            "block_size" in hyper_params and 
             "num_blocks" in hyper_params and
             "activation" in hyper_params), "Error! make sure hyper_params has dropout_rate, block_sizes, and num_blocks"
     
@@ -36,12 +37,15 @@ def baseFNNmodel(input_shape, output_shape, hyper_params):
 
     for block_ndx in range(hyper_params["num_blocks"]):
     
-        x1 = FFN_block(hyper_params, name=f"ffn_block{block_ndx+3}")(x)
+        if hyper_params["useSkip"]:
+            x1 = FFN_block(hyper_params, name=f"ffn_block{block_ndx+2}")(x)
     
-        x = layers.Add(name=f"skip_connection{block_ndx+1}")([x, x1])
+            x = layers.Add(name=f"skip_connection{block_ndx+1}")([x, x1])
+        else:
+            x = FFN_block(hyper_params, name=f"ffn_block{block_ndx+2}")(x)
 
     # Compute logits.
-    logits = layers.Dense(output_shape, name="logits")(x)
+    logits = layers.Dense(output_shape, activation="softmax", name="logits")(x)
     # Create the model.
     return keras.Model(inputs=inputs, outputs=logits, name="baseFFN")
 
@@ -54,7 +58,7 @@ def run_experiment(model, x_train, y_train, x_test, y_test, num_epochs, hyper_pa
     
     model.compile(
         optimizer=keras.optimizers.Adam(hyper_params["learning_rate"]),
-        loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+        loss=keras.losses.SparseCategoricalCrossentropy(from_logits=False),
         metrics=[keras.metrics.SparseCategoricalAccuracy(name="accuracy")],
     )
     # Create an early stopping callback.
@@ -72,11 +76,18 @@ def run_experiment(model, x_train, y_train, x_test, y_test, num_epochs, hyper_pa
     )
 
     eval_test = model.evaluate(x_test, y_test,)
+    y_pred = model.predict(x_test)
+    y_pred = y_pred/np.sum(y_pred, axis=1, keepdims=True)
 
+    if len(np.unique(y_test))>2: 
+        roc = roc_auc_score(y_test, y_pred, multi_class="ovo")
+    else: 
+        roc = roc_auc_score(y_test, np.argmax(y_pred, axis=1),)
+    
     test_scores={
         "loss": eval_test[0],
         "accuracy": eval_test[1],
-        "roc": roc_auc_score(y_test, np.argmax(model.predict(x_test), axis=1))
+        "roc": roc
     }
 
     return history, test_scores
